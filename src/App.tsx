@@ -1,0 +1,251 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Portal } from './components/Portal';
+import { Store } from './components/Store';
+import { CelestialState } from './types';
+import { isStorePath, pathForPortalView, portalViewForPath } from './routes';
+import type { PortalRouteView } from './routes';
+
+const STORAGE_KEY = 'CELESTIAL_LOBBY_STATE_v1';
+const OWNER_SESSION_KEY = 'CL_OWNER_BROWSER_SESSION_V1';
+const OWNER_NOTEPAD_KEY = 'CL_OWNER_NOTEPAD_V1';
+const OWNER_FEEDBACK_KEY = 'CL_OWNER_FEEDBACK_V1';
+
+function canAccessStore(): boolean {
+  try {
+    const rawSession = sessionStorage.getItem('CL_GATEWAY_SESSION_V1');
+    const session = rawSession ? JSON.parse(rawSession) as { role?: string } : null;
+    if (session?.role === 'client' || session?.role === 'owner') return true;
+    const ownerExpiresAt = Number(localStorage.getItem(OWNER_SESSION_KEY) || 0);
+    if (ownerExpiresAt > Date.now()) return true;
+    const onboarding = JSON.parse(localStorage.getItem('CL_GUEST_ONBOARDING_V1') || 'null') as { status?: string; termsAccepted?: boolean } | null;
+    return onboarding?.status === 'completed' && onboarding.termsAccepted === true;
+  } catch {
+    return false;
+  }
+}
+
+const DEFAULT_STATE: CelestialState = {
+  currentStep: 1,
+  cart: {},
+  addons: {
+    lubricant: 0,
+    accessory: 0
+  },
+  specialHandling: 'standard',
+  promoCode: '',
+  discount: 0,
+  deliveryDetails: { name: '', phone: '', address: '', method: 'Standard Rider Delivery' },
+  activeOrder: {
+    orderId: '',
+    startTime: null,
+    paymentSender: '',
+    paymentScreenshot: null,
+    status: 'submitted'
+  }
+};
+
+function getInitialPortalView(): PortalRouteView {
+  const requestedView = portalViewForPath(window.location.pathname) ?? 'landing';
+  if (requestedView === 'onboarding' || requestedView === 'onboarding-terms') {
+    let activeSession = false;
+    try { activeSession = sessionStorage.getItem('CL_ONBOARDING_ACTIVE_SESSION') === '1'; } catch { /* storage unavailable */ }
+    if (!activeSession) {
+      window.history.replaceState({ celestialRoute: true }, '', pathForPortalView('guest'));
+      return 'guest';
+    }
+  }
+  return requestedView;
+}
+
+export const App: React.FC = () => {
+  const [mode, setMode] = useState<'portal' | 'store'>(() => {
+    if (!isStorePath(window.location.pathname)) return 'portal';
+    if (canAccessStore()) return 'store';
+    window.history.replaceState({ celestialRoute: true }, '', pathForPortalView('landing'));
+    return 'portal';
+  });
+  const [portalStartView, setPortalStartView] = useState<PortalRouteView>(getInitialPortalView);
+  const [portalInstanceKey, setPortalInstanceKey] = useState(0);
+
+  useEffect(() => {
+    const syncAppRoute = () => {
+      let onboardingSessionActive = false;
+      try { onboardingSessionActive = sessionStorage.getItem('CL_ONBOARDING_ACTIVE_SESSION') === '1'; } catch { /* storage unavailable */ }
+      // Let the onboarding-specific Back guard show its confirmation before the app router can unmount it.
+      if (onboardingSessionActive) return;
+
+      if (isStorePath(window.location.pathname)) {
+        if (canAccessStore()) {
+          setMode('store');
+        } else {
+          window.history.replaceState({ celestialRoute: true }, '', pathForPortalView('landing'));
+          setMode('portal');
+          setPortalStartView('landing');
+          setPortalInstanceKey(key => key + 1);
+        }
+        return;
+      }
+      const requestedView = portalViewForPath(window.location.pathname);
+      if (requestedView === 'onboarding' || requestedView === 'onboarding-terms') {
+        window.history.replaceState({ celestialRoute: true }, '', pathForPortalView('guest'));
+        setMode('portal');
+        setPortalStartView('guest');
+      } else {
+        setMode('portal');
+        setPortalStartView(requestedView ?? 'landing');
+      }
+      setPortalInstanceKey(key => key + 1);
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    };
+    window.addEventListener('popstate', syncAppRoute);
+    return () => window.removeEventListener('popstate', syncAppRoute);
+  }, []);
+  const [ownerActive, setOwnerActive] = useState(() => { try { return Number(localStorage.getItem(OWNER_SESSION_KEY) || 0) > Date.now(); } catch { return false; } });
+  const [ownerPanel, setOwnerPanel] = useState<'none' | 'notepad' | 'tools'>('none');
+  const [ownerMenuOpen, setOwnerMenuOpen] = useState(false);
+  const [ownerNotes, setOwnerNotes] = useState(() => { try { const saved = localStorage.getItem(OWNER_NOTEPAD_KEY); return saved && saved.trim() ? saved : "CELESTIAL LOBBY — OWNER TESTING REFERENCE\n\nOWNER OVERRIDE PASSWORD\nAVISALA ESHMA\n\nHOW TO OPEN OWNER ACCESS\n1. Return to the public landing page.\n2. Tap the CELESTIAL LOBBY emblem five times.\n3. Enter the Owner Override password above.\n4. Owner access is a browser-local demo session lasting up to 24 hours.\n\nOWNER OVERRIDE CONTROLS\n• Return to Owner Preview — reopen the owner preview.\n• Exit to Guest Environment — leave the owner preview.\n• Reset Onboarding & Open Guest Environment — clear the local guest onboarding record and active onboarding session only.\n\nACCESS CREDENTIAL STATUS\n• Regular Client Access ID: NOT ISSUED / NOT ACTIVE.\n• Regular Client APG Code: NOT ISSUED / NOT ACTIVE.\n• Price Access Code, Class ID, and E2E Code: not configured as working credentials in the current repository version. Do not treat the Owner password as any of these codes.\n• Public promo codes have been disabled; special benefits require account-based eligibility.\n\nIMPORTANT\nThis is a GitHub Pages browser demo. Owner access is not secure authentication; the password is visible in public website code and can be bypassed by a technically capable visitor. Do not use real customer, payment, or confidential information. Notes are stored in this browser only."; } catch { return "CELESTIAL LOBBY — OWNER TESTING REFERENCE\n\nOWNER OVERRIDE PASSWORD\nAVISALA ESHMA\n\nHOW TO OPEN OWNER ACCESS\n1. Return to the public landing page.\n2. Tap the CELESTIAL LOBBY emblem five times.\n3. Enter the Owner Override password above.\n4. Owner access is a browser-local demo session lasting up to 24 hours.\n\nOWNER OVERRIDE CONTROLS\n• Return to Owner Preview — reopen the owner preview.\n• Exit to Guest Environment — leave the owner preview.\n• Reset Onboarding & Open Guest Environment — clear the local guest onboarding record and active onboarding session only.\n\nACCESS CREDENTIAL STATUS\n• Regular Client Access ID: NOT ISSUED / NOT ACTIVE.\n• Regular Client APG Code: NOT ISSUED / NOT ACTIVE.\n• Price Access Code, Class ID, and E2E Code: not configured as working credentials in the current repository version. Do not treat the Owner password as any of these codes.\n• Promo demo codes currently accepted by Store: ORBIT10 and CELESTIAL.\n\nIMPORTANT\nThis is a GitHub Pages browser demo. Owner access is not secure authentication; the password is visible in public website code and can be bypassed by a technically capable visitor. Do not use real customer, payment, or confidential information. Notes are stored in this browser only."; } });
+  const [feedbackPage, setFeedbackPage] = useState(''); const [feedbackElement, setFeedbackElement] = useState(''); const [feedbackIssue, setFeedbackIssue] = useState(''); const [feedbackChange, setFeedbackChange] = useState('');
+  const [feedbackItems, setFeedbackItems] = useState<Array<{id:string;date:string;page:string;element:string;issue:string;change:string}>>(() => { try { return JSON.parse(localStorage.getItem(OWNER_FEEDBACK_KEY) || '[]'); } catch { return []; } });
+  const [referenceImageName, setReferenceImageName] = useState(''); const [referenceImageUrl, setReferenceImageUrl] = useState(''); const imageInputRef = useRef<HTMLInputElement>(null);
+
+  const [state, setState] = useState<CelestialState>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as Partial<CelestialState>;
+        const oldSeededDemo = parsed.activeOrder?.orderId === '#CL20261104-001';
+        return {
+          ...DEFAULT_STATE,
+          ...parsed,
+          ...(oldSeededDemo ? { cart: {}, deliveryDetails: DEFAULT_STATE.deliveryDetails, activeOrder: DEFAULT_STATE.activeOrder } : {}),
+          promoCode: '',
+          discount: 0
+        };
+      }
+    } catch (e) {
+      console.error('Failed to load state from localStorage', e);
+    }
+    return DEFAULT_STATE;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (e) {
+      console.error('Failed to save state to localStorage', e);
+    }
+  }, [state]);
+
+  useEffect(() => { try { localStorage.setItem(OWNER_NOTEPAD_KEY, ownerNotes); } catch { /* best effort */ } }, [ownerNotes]);
+  useEffect(() => { try { localStorage.setItem(OWNER_FEEDBACK_KEY, JSON.stringify(feedbackItems)); } catch { /* best effort */ } }, [feedbackItems]);
+  useEffect(() => { if (!ownerActive) return; const expiresAt = Number(localStorage.getItem(OWNER_SESSION_KEY) || 0); const delay = expiresAt - Date.now(); if (delay <= 0) { setOwnerActive(false); return; } const timer = window.setTimeout(() => { localStorage.removeItem(OWNER_SESSION_KEY); setOwnerActive(false); setOwnerPanel('none'); }, delay); return () => window.clearTimeout(timer); }, [ownerActive]);
+  useEffect(() => () => { if (referenceImageUrl) URL.revokeObjectURL(referenceImageUrl); }, [referenceImageUrl]);
+
+  const handleReset = () => {
+    // Reset only the in-progress Store journey. Keep the customer's current route,
+    // access/session state, onboarding record, and Owner preview session untouched.
+    setState({
+      ...DEFAULT_STATE,
+      currentStep: 1,
+      cart: {},
+      addons: { lubricant: 0, accessory: 0 },
+      promoCode: '',
+      discount: 0,
+      deliveryDetails: {
+        name: '',
+        phone: '',
+        address: '',
+        method: 'Standard Rider Delivery'
+      },
+      activeOrder: {
+        orderId: '',
+        startTime: null,
+        paymentSender: '',
+        paymentScreenshot: null,
+        status: 'submitted'
+      }
+    });
+  };
+
+  return (
+    <div className="min-h-screen text-slate-100 bg-[#05040a]">
+      {mode === 'portal' ? (
+        <Portal
+          key={portalInstanceKey}
+          initialView={portalStartView}
+          activeOrder={state.activeOrder}
+          deliveryDetails={state.deliveryDetails}
+          onUpdateStatus={(newStatus) => {
+            setState(prev => ({
+              ...prev,
+              activeOrder: {
+                ...prev.activeOrder,
+                status: newStatus
+              }
+            }));
+          }}
+          onOwnerSessionChange={setOwnerActive}
+          onOpenOwnerNotepad={() => setOwnerPanel('notepad')}
+          onOpenOwnerTools={() => setOwnerPanel('tools')}
+          onEnterStore={() => {
+            if (!canAccessStore()) {
+              window.history.replaceState({ celestialRoute: true }, '', pathForPortalView('landing'));
+              setPortalStartView('landing');
+              setMode('portal');
+              setPortalInstanceKey(key => key + 1);
+              return;
+            }
+            window.history.pushState({ celestialRoute: true }, '', '/celestial/store');
+            setMode('store');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+        />
+      ) : (
+        <Store
+          state={state}
+          setState={setState}
+          onPurchaseWindowExpired={() => {
+            window.history.pushState({ celestialRoute: true }, '', pathForPortalView('guest'));
+            setPortalStartView('guest');
+            setMode('portal');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onReturnToLobby={() => {
+            window.history.pushState({ celestialRoute: true }, '', pathForPortalView('landing'));
+            setPortalStartView('landing');
+            setMode('portal');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onOpenPortalPage={(page) => {
+            window.history.pushState({ celestialRoute: true }, '', pathForPortalView(page));
+            setPortalStartView(page);
+            setMode('portal');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onReset={handleReset}
+        />
+      )}
+
+      {ownerActive && <>
+        {ownerPanel==='notepad' && <section className="fixed bottom-24 left-3 z-[200] w-[min(23rem,calc(100vw-1.5rem))] max-h-[72vh] overflow-y-auto rounded-2xl border border-purple-300/40 bg-slate-950/95 p-4 text-slate-100 shadow-2xl">
+          <div className="flex justify-between"><strong className="text-amber-300 text-xs">OWNER NOTEPAD &amp; FEEDBACK</strong><button onClick={()=>setOwnerPanel('none')}>×</button></div>
+          <label className="mt-2 block text-xs">Working notes</label><textarea rows={4} className="mt-1 w-full rounded-lg bg-slate-900 border border-purple-400/30 p-2 text-sm" value={ownerNotes} onChange={e=>setOwnerNotes(e.target.value)} placeholder="Development notes and reminders..." />
+          <p className="text-[10px] text-purple-200/70">Saved in this browser only. Never enter passwords or sensitive customer data.</p>
+          <div className="my-3 border-t border-purple-500/30"/><strong className="text-amber-300 text-xs">PAGE FEEDBACK</strong>
+          <label className="mt-2 block text-xs">Page or route</label><input className="w-full rounded bg-slate-900 border border-purple-400/30 p-2 text-xs" value={feedbackPage} onChange={e=>setFeedbackPage(e.target.value)} placeholder="e.g. Guest Environment"/>
+          <label className="mt-2 block text-xs">Affected element</label><input className="w-full rounded bg-slate-900 border border-purple-400/30 p-2 text-xs" value={feedbackElement} onChange={e=>setFeedbackElement(e.target.value)} placeholder="e.g. Notepad button"/>
+          <label className="mt-2 block text-xs">What is wrong?</label><textarea rows={2} className="w-full rounded bg-slate-900 border border-purple-400/30 p-2 text-xs" value={feedbackIssue} onChange={e=>setFeedbackIssue(e.target.value)} />
+          <label className="mt-2 block text-xs">What should change?</label><textarea rows={2} className="w-full rounded bg-slate-900 border border-purple-400/30 p-2 text-xs" value={feedbackChange} onChange={e=>setFeedbackChange(e.target.value)} />
+          <div className="mt-2 rounded border border-dashed border-purple-400/30 p-2"><input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={e=>{const f=e.target.files?.[0];if(!f)return;if(referenceImageUrl)URL.revokeObjectURL(referenceImageUrl);setReferenceImageName(f.name);setReferenceImageUrl(URL.createObjectURL(f));}}/><button className="text-xs text-amber-200 underline" onClick={()=>imageInputRef.current?.click()}>Choose temporary screenshot</button>{referenceImageName&&<><p className="text-[10px] mt-1">{referenceImageName} · not saved</p><img src={referenceImageUrl} alt="Temporary screenshot" className="mt-1 max-h-28 rounded object-contain"/><button className="text-[10px] text-red-300 underline" onClick={()=>{URL.revokeObjectURL(referenceImageUrl);setReferenceImageUrl('');setReferenceImageName('');if(imageInputRef.current)imageInputRef.current.value='';}}>Discard image</button></>}<p className="text-[10px] text-purple-200/70">Image preview is temporary; only your written description is saved.</p></div>
+          <button disabled={!feedbackPage.trim()||!feedbackIssue.trim()} className="primary-action mt-3 w-full disabled:opacity-40" onClick={()=>{const item={id:String(Date.now()),date:new Date().toISOString(),page:feedbackPage.trim(),element:feedbackElement.trim(),issue:feedbackIssue.trim(),change:feedbackChange.trim()};setFeedbackItems(v=>[item,...v]);setFeedbackPage('');setFeedbackElement('');setFeedbackIssue('');setFeedbackChange('');if(referenceImageUrl)URL.revokeObjectURL(referenceImageUrl);setReferenceImageUrl('');setReferenceImageName('');if(imageInputRef.current)imageInputRef.current.value='';}}>Save text feedback</button>
+          <div className="mt-3 flex justify-between text-xs"><span>Saved feedback: {feedbackItems.length}</span><button className="text-amber-200 underline" onClick={()=>{const blob=new Blob([JSON.stringify({notes:ownerNotes,feedback:feedbackItems},null,2)],{type:'application/json'});const u=URL.createObjectURL(blob);const a=document.createElement('a');a.href=u;a.download='celestial-owner-feedback.json';a.click();URL.revokeObjectURL(u);}}>Export JSON</button></div>
+          {feedbackItems.map(x=><div key={x.id} className="mt-2 rounded border border-purple-400/20 p-2 text-[10px]"><b className="text-amber-200">{x.page}{x.element?' · '+x.element:''}</b><p>{x.issue}</p>{x.change&&<p className="text-emerald-200">Requested: {x.change}</p>}<button className="text-red-300 underline" onClick={()=>setFeedbackItems(v=>v.filter(y=>y.id!==x.id))}>Delete</button></div>)}
+        </section>}
+        {ownerPanel==='tools' && <section className="fixed bottom-24 right-3 z-[200] w-[min(20rem,calc(100vw-1.5rem))] max-h-[70vh] overflow-y-auto rounded-2xl border border-amber-300/40 bg-slate-950/95 p-4 text-slate-100 shadow-2xl"><div className="flex justify-between"><b className="text-amber-300 text-xs">OWNER OVERRIDE CONTROLS</b><button aria-label="Close owner override controls" onClick={()=>setOwnerPanel('none')}>×</button></div><div className="mt-3 grid gap-2"><button className="secondary-action" onClick={()=>{window.history.pushState({ celestialRoute: true }, '', pathForPortalView('owner-preview'));setPortalStartView('owner-preview');setPortalInstanceKey(k=>k+1);setMode('portal');setOwnerPanel('none');setOwnerMenuOpen(false);window.scrollTo(0,0);}}>Return to Owner Workspace</button><button className="secondary-action" onClick={()=>{localStorage.removeItem('CL_GUEST_ONBOARDING_V1');sessionStorage.removeItem('CL_ONBOARDING_ACTIVE_SESSION');window.history.pushState({ celestialRoute: true }, '', pathForPortalView('guest'));setPortalStartView('guest');setPortalInstanceKey(k=>k+1);setMode('portal');setOwnerPanel('none');setOwnerMenuOpen(false);window.scrollTo(0,0);}}>Reset Onboarding &amp; Open Guest Environment</button><button className="secondary-action" onClick={()=>{window.history.pushState({ celestialRoute: true }, '', pathForPortalView('guest'));setPortalStartView('guest');setPortalInstanceKey(k=>k+1);setMode('portal');setOwnerPanel('none');setOwnerMenuOpen(false);window.scrollTo(0,0);}}>Open Guest Environment</button><button className="primary-action" onClick={()=>{localStorage.removeItem(OWNER_SESSION_KEY);setOwnerActive(false);setOwnerPanel('none');setOwnerMenuOpen(false);setPortalStartView('landing');setPortalInstanceKey(k=>k+1);setMode('portal');window.scrollTo(0,0);}}>End Owner Override Session</button></div><p className="mt-2 text-[10px] text-amber-100/70">Reset affects this browser's demo onboarding record only. Ending the session removes local Owner access on this browser.</p></section>}
+
+      </>}
+    </div>
+  );
+};
+
+export default App;
